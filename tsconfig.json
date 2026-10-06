@@ -4,5 +4,7 @@
     // Runtime types come from `wrangler types` (env.d.ts), not the
     // @cloudflare/workers-types package.
     "types": ["node", "vite/client"]
-  }
+  },
+  // test/ has its own tsconfig.json
+  "exclude": ["node_modules", "test"]
 }

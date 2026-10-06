@@ -1,14 +1,42 @@
 # Project: cf_ai_interview_coach
-DSA mock interview coach on Cloudflare.
+
+DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiring).
+
+## Product
+
+- User chats with an AI interviewer that gives a DSA problem, offers hints, and grades their approach
+- Weak topics are injected into the system prompt so the interviewer targets them
+- Tools: `getNextProblem`, `recordScore`, `scheduleRevision`
 
 ## Stack
-- Agents SDK (AIChatAgent = Durable Object, 1 per user, built-in SQLite via this.sql)
-- Workers AI: @cf/meta/llama-3.3-70b-instruct-fp8-fast
-- Workflows for grading + spaced-repetition scheduling
-- React chat UI (from agents-starter)
+
+- LLM: Llama 3.3 on Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`)
+- Agents SDK `AIChatAgent` = one Durable Object per user, built-in SQLite via `this.sql`
+  - Tables: `sessions`, `scores`, `weak_topics`
+- Cloudflare Workflow: grade answer → update weak_topics → sleep N days → revision nudge
+- React chat UI from the agents-starter template (served on Workers); voice is optional
+
+## Decisions
+
+- Revision nudge: the Workflow writes a pending nudge into the user's DO; it's shown on their next visit
+- Problem bank: hard-coded 20–30 problems, each tagged with topics + difficulty
+- Grading: the LLM gives live hints/feedback in chat; the Workflow's grade step produces structured JSON `{topic: score}` that updates `weak_topics`
+- Llama tool calling: test it first. If unreliable, make `getNextProblem`/`recordScore` deterministic code paths instead of LLM tools
+
+## Assignment requirements
+
+- LLM, workflow/coordination, chat input, and memory/state must all be present
+- Repo name must start with `cf_ai_`
+- README.md: run instructions + deployed link
+- PROMPTS.md: every AI prompt used
 
 ## Rules
-- Check Cloudflare docs MCP before using any CF API
+
 - Explain the plan before writing code
-- After each task, append my prompt verbatim to PROMPTS.md
-- Don't touch unrelated starter files
+- Verify Cloudflare APIs against current docs (Cloudflare docs MCP) before using them
+- Log every prompt the user gives, verbatim, to PROMPTS.md
+- Don't touch unrelated files (including starter files not needed for the task)
+
+## Environment
+
+- Requires Node >= 22 (use nvm's v24: `source ~/.nvm/nvm.sh && nvm use 24`)
