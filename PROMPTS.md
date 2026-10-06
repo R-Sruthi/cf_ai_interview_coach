@@ -242,3 +242,15 @@ Git identity is set locally to R-Sruthi <sruthirs2004@gmail.com>. Don't change g
 Note: I rewrote history to fix the author, so the commit hashes in CLAUDE.md's Progress section are stale. Update them from git log.
 Log this prompt to PROMPTS.md.
 ```
+
+## 18. package.json description
+
+```
+Update package.json description to "DSA mock interview coach on Cloudflare: Workers AI (Llama 3.3), Agents SDK Durable Objects, Workflows".
+```
+
+## 19. Commit package description
+
+```
+Separate commit: "chore: package description + prompts cross-check". Don't push.
+```

@@ -2,7 +2,7 @@
   "name": "cf-ai-interview-coach",
   "version": "1.0.0",
   "private": true,
-  "description": "Starter template for building AI chat agents on Cloudflare",
+  "description": "DSA mock interview coach on Cloudflare: Workers AI (Llama 3.3), Agents SDK Durable Objects, Workflows",
   "keywords": [
     "agents",
     "ai",
