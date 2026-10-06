@@ -2,8 +2,8 @@ import { Suspense, useCallback, useState, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { UIMessage } from "ai";
-import type { ChatAgent } from "./server";
-import type { Difficulty, Problem } from "./problems";
+import type { ChatAgent, CoachState } from "./server";
+import { WEAK_THRESHOLD, type Difficulty, type Problem } from "./problems";
 import {
   Badge,
   Button,
@@ -81,12 +81,12 @@ function Chat() {
   const [showDebug, setShowDebug] = useState(false);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
-  const [busy, setBusy] = useState<"problem" | "grade" | null>(null);
+  const [busy, setBusy] = useState<"problem" | "submit" | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const toasts = useKumoToastManager();
 
-  const agent = useAgent<ChatAgent>({
+  const agent = useAgent<ChatAgent, CoachState>({
     agent: "ChatAgent",
     name: userId,
     onOpen: useCallback(() => setConnected(true), []),
@@ -103,6 +103,11 @@ function Chat() {
   });
 
   const isStreaming = status === "streaming" || status === "submitted";
+  const grading = agent.state?.grading;
+  const isGrading = grading?.status === "grading";
+  const weakTopics = (agent.state?.topicStats ?? []).filter(
+    (s) => s.avgScore < WEAK_THRESHOLD
+  );
 
   // Restore the active problem after a reload or reconnect.
   useEffect(() => {
@@ -112,6 +117,24 @@ function Chat() {
       .then(setProblem)
       .catch((e: unknown) => console.error("getCurrentProblem failed:", e));
   }, [connected, agent]);
+
+  // Grading runs in a Workflow; its progress arrives through agent state sync.
+  useEffect(() => {
+    // Re-fetch rather than clear: a stale "done" from an earlier submission
+    // must not hide a problem started since.
+    if (grading?.status === "done") {
+      agent.stub
+        .getCurrentProblem()
+        .then(setProblem)
+        .catch((e: unknown) => console.error("getCurrentProblem failed:", e));
+    }
+    if (grading?.status === "error") {
+      toasts.add({
+        title: "Grading failed",
+        description: grading.error ?? "Try submitting again."
+      });
+    }
+  }, [agent, grading?.status, grading?.sessionId, grading?.error, toasts]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -146,10 +169,9 @@ function Chat() {
   }, [agent, difficulty, showError]);
 
   const submitAndGrade = useCallback(async () => {
-    setBusy("grade");
+    setBusy("submit");
     try {
       await agent.stub.submitAndGrade();
-      setProblem(null);
     } catch (e) {
       showError("Grading failed", e);
     } finally {
@@ -227,10 +249,22 @@ function Chat() {
               ))}
             </div>
           ) : (
-            <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2 flex-1">
               <Text size="sm" variant="secondary">
                 No active problem
               </Text>
+              {weakTopics.length > 0 && (
+                <>
+                  <Text size="xs" variant="secondary">
+                    · Weak topics:
+                  </Text>
+                  {weakTopics.map((s) => (
+                    <Badge key={s.topic} variant="outline">
+                      {s.topic} {s.avgScore.toFixed(1)}
+                    </Badge>
+                  ))}
+                </>
+              )}
             </div>
           )}
           <select
@@ -247,7 +281,7 @@ function Chat() {
             variant="secondary"
             icon={<ShuffleIcon size={16} />}
             onClick={newProblem}
-            disabled={!connected || busy !== null || isStreaming}
+            disabled={!connected || busy !== null || isStreaming || isGrading}
           >
             {busy === "problem" ? "Loading..." : "New problem"}
           </Button>
@@ -255,9 +289,15 @@ function Chat() {
             variant="primary"
             icon={<CheckCircleIcon size={16} />}
             onClick={submitAndGrade}
-            disabled={!connected || !problem || busy !== null || isStreaming}
+            disabled={
+              !connected ||
+              !problem ||
+              busy !== null ||
+              isStreaming ||
+              isGrading
+            }
           >
-            {busy === "grade" ? "Grading..." : "Submit & grade"}
+            {isGrading || busy === "submit" ? "Grading..." : "Submit & grade"}
           </Button>
         </div>
       </div>

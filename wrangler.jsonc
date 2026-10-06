@@ -18,6 +18,16 @@
       }
     ]
   },
+  "workflows": [
+    {
+      "name": "grading-workflow",
+      "binding": "GRADING_WORKFLOW",
+      "class_name": "GradingWorkflow"
+    }
+  ],
+  // Delay before the revision nudge. "2 minutes" so the deployed demo shows it;
+  // real use would be days (e.g. "3 days").
+  "vars": { "NUDGE_DELAY": "2 minutes" },
   "migrations": [
     {
       "new_sqlite_classes": ["ChatAgent"],

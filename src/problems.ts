@@ -18,6 +18,9 @@ export const TOPICS = [
 ] as const;
 
 export type Topic = (typeof TOPICS)[number];
+
+// A topic counts as weak while its average score is below this.
+export const WEAK_THRESHOLD = 7;
 export type Difficulty = "easy" | "medium" | "hard";
 
 export interface Problem {

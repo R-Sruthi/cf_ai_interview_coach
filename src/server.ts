@@ -1,24 +1,21 @@
 import { createWorkersAI } from "workers-ai-provider";
-import { callable, routeAgentRequest } from "agents";
+import { callable, routeAgentRequest, type Connection } from "agents";
 import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
-import {
-  convertToModelMessages,
-  generateText,
-  Output,
-  streamText,
-  type UIMessage
-} from "ai";
-import { z } from "zod";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { dedupeStreamingBinding } from "./ai-binding";
+import { MODEL, type Grade } from "./grading";
 import {
   getProblem,
   PROBLEMS,
   type Difficulty,
   type Problem,
-  type Topic
+  type Topic,
+  WEAK_THRESHOLD
 } from "./problems";
+import { buildSystemPrompt } from "./prompt";
+import type { GradingParams } from "./workflow";
 
-const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export { GradingWorkflow } from "./workflow";
 
 interface SessionRow {
   id: string;
@@ -27,32 +24,22 @@ interface SessionRow {
   started_at: number;
 }
 
-export interface GradeResult {
-  problemId: string;
-  scores: Partial<Record<Topic, number>>;
-  feedback: string;
+export interface TopicStat {
+  topic: Topic;
+  avgScore: number;
+  attempts: number;
 }
 
-// Score keys are built from the problem's own topics, so the model can't
-// invent topic names that would end up in weak_topics.
-function gradeSchema(topics: Problem["topics"]) {
-  const topicEnum = z.enum(topics);
-  const score = z.number().int().min(0).max(10);
-  return z.object({
-    feedback: z
-      .string()
-      .describe(
-        "2-3 sentences addressed to the candidate: what they got right, what was missing or wrong, and the optimal time/space complexity. No numbers or scores."
-      ),
-    scores: z
-      .object(
-        Object.fromEntries(topicEnum.options.map((t) => [t, score])) as Record<
-          Topic,
-          typeof score
-        >
-      )
-      .strict()
-  });
+export interface CoachState {
+  grading: {
+    status: "idle" | "grading" | "done" | "error";
+    sessionId?: string;
+    scores?: Grade["scores"];
+    feedback?: string;
+    error?: string;
+  };
+  // All scored topics, weakest first.
+  topicStats: TopicStat[];
 }
 
 function textOf(message: UIMessage): string {
@@ -70,9 +57,10 @@ function assistantMessage(text: string): UIMessage {
   };
 }
 
-export class ChatAgent extends AIChatAgent<Env> {
+export class ChatAgent extends AIChatAgent<Env, CoachState> {
   maxPersistedMessages = 100;
   chatRecovery = true;
+  initialState: CoachState = { grading: { status: "idle" }, topicStats: [] };
 
   onStart() {
     this.sql`CREATE TABLE IF NOT EXISTS sessions (
@@ -89,21 +77,32 @@ export class ChatAgent extends AIChatAgent<Env> {
       score INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     )`;
-    // Filled by the grading Workflow (step 3).
+    // Per-topic averages over all scores; a topic is "weak" below WEAK_THRESHOLD.
     this.sql`CREATE TABLE IF NOT EXISTS weak_topics (
       topic TEXT PRIMARY KEY,
       avg_score REAL NOT NULL,
       attempts INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )`;
-    // Written by the Workflow, shown on the user's next visit (step 3).
+    // One nudge per graded session (UNIQUE keeps Workflow step retries idempotent).
     this.sql`CREATE TABLE IF NOT EXISTS pending_nudges (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL UNIQUE,
       topic TEXT NOT NULL,
       message TEXT NOT NULL,
       due_at INTEGER NOT NULL,
       shown_at INTEGER
     )`;
+  }
+
+  // Only the server (and the Workflow, via the agent) may change state.
+  validateStateChange(_next: CoachState, source: Connection | "server") {
+    if (source !== "server") throw new Error("State is read-only for clients");
+  }
+
+  // Runs after the SDK has sent its protocol messages to the new connection.
+  async onConnect() {
+    await this.deliverNudges();
   }
 
   private openSession(): SessionRow | null {
@@ -113,11 +112,21 @@ export class ChatAgent extends AIChatAgent<Env> {
     return row ?? null;
   }
 
+  private topicStats(): TopicStat[] {
+    return this.sql<{ topic: Topic; avg_score: number; attempts: number }>`
+      SELECT topic, avg_score, attempts FROM weak_topics
+      ORDER BY avg_score ASC, topic ASC`.map((r) => ({
+      topic: r.topic,
+      avgScore: r.avg_score,
+      attempts: r.attempts
+    }));
+  }
+
   private weakTopics(): Topic[] {
-    return this.sql<{ topic: Topic }>`
-      SELECT topic FROM weak_topics ORDER BY avg_score ASC LIMIT 3`.map(
-      (r) => r.topic
-    );
+    return this.topicStats()
+      .filter((s) => s.avgScore < WEAK_THRESHOLD)
+      .slice(0, 3)
+      .map((s) => s.topic);
   }
 
   @callable()
@@ -128,6 +137,9 @@ export class ChatAgent extends AIChatAgent<Env> {
 
   @callable()
   async getNextProblem(difficulty: Difficulty = "medium"): Promise<Problem> {
+    if (this.state.grading.status === "grading") {
+      throw new Error("Wait for grading to finish.");
+    }
     const now = Date.now();
     // Abandon any ungraded problem.
     this.sql`UPDATE sessions SET ended_at = ${now} WHERE ended_at IS NULL`;
@@ -137,16 +149,31 @@ export class ChatAgent extends AIChatAgent<Env> {
         problem_id: string;
       }>`SELECT DISTINCT problem_id FROM sessions`.map((r) => r.problem_id)
     );
-    const ofDifficulty = PROBLEMS.filter((p) => p.difficulty === difficulty);
-    const fresh = ofDifficulty.filter((p) => !attempted.has(p.id));
-    const pool = fresh.length > 0 ? fresh : ofDifficulty;
-    const weak = new Set(this.weakTopics());
-    const targeted = pool.filter((p) => p.topics.some((t) => weak.has(t)));
-    const candidates = targeted.length > 0 ? targeted : pool;
+    const preferFresh = (pool: Problem[]) => {
+      const fresh = pool.filter((p) => !attempted.has(p.id));
+      return fresh.length > 0 ? fresh : pool;
+    };
+
+    // When there is a weak topic, always practise the weakest one; the
+    // difficulty is a preference that is dropped if that topic has none.
+    const [weakest] = this.weakTopics();
+    let candidates: Problem[];
+    if (weakest) {
+      const onTopic = PROBLEMS.filter((p) => p.topics.includes(weakest));
+      const atDifficulty = onTopic.filter((p) => p.difficulty === difficulty);
+      candidates = preferFresh(
+        atDifficulty.length > 0 ? atDifficulty : onTopic
+      );
+    } else {
+      candidates = preferFresh(
+        PROBLEMS.filter((p) => p.difficulty === difficulty)
+      );
+    }
     const problem = candidates[Math.floor(Math.random() * candidates.length)];
 
+    const focus = weakest ? ` Focus topic: **${weakest}**.` : "";
     const message = assistantMessage(
-      `**${problem.title}** (${problem.difficulty})\n\n${problem.statement}\n\nWalk me through your approach before writing any code.`
+      `**${problem.title}** (${problem.difficulty})${focus}\n\n${problem.statement}\n\nWalk me through your approach before writing any code.`
     );
     this
       .sql`INSERT INTO sessions (id, problem_id, problem_message_id, started_at)
@@ -155,8 +182,13 @@ export class ChatAgent extends AIChatAgent<Env> {
     return problem;
   }
 
+  // Starts the GradingWorkflow and returns immediately; the result arrives via
+  // state sync (grading.status) and a chat message.
   @callable()
-  async submitAndGrade(): Promise<GradeResult> {
+  async submitAndGrade(): Promise<{ instanceId: string }> {
+    if (this.state.grading.status === "grading") {
+      throw new Error("Already grading.");
+    }
     const session = this.openSession();
     const problem = session ? getProblem(session.problem_id) : undefined;
     if (!session || !problem) {
@@ -166,56 +198,99 @@ export class ChatAgent extends AIChatAgent<Env> {
     const start = this.messages.findIndex(
       (m) => m.id === session.problem_message_id
     );
-    const transcript = this.messages
-      .slice(start + 1)
+    const after = this.messages.slice(start + 1);
+    if (!after.some((m) => m.role === "user")) {
+      throw new Error("Explain your approach in the chat before submitting.");
+    }
+    const transcript = after
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map(
         (m) =>
           `${m.role === "user" ? "Candidate" : "Interviewer"}: ${textOf(m)}`
       )
       .join("\n\n");
-    if (!this.messages.slice(start + 1).some((m) => m.role === "user")) {
-      throw new Error("Explain your approach in the chat before submitting.");
-    }
 
-    const workersai = createWorkersAI({ binding: this.env.AI });
-    const { output } = await generateText({
-      model: workersai(MODEL),
-      output: Output.object({ schema: gradeSchema(problem.topics) }),
-      system: `You grade DSA mock interviews. Score the candidate 0-10 on each listed topic, based only on what the candidate said.
-10 = optimal approach with correct complexity, clearly explained. 7 = correct but suboptimal or with gaps. 4 = partially correct. 0-2 = wrong or no real attempt.
-Hints the interviewer gave lower the score.
-The feedback field is written to the candidate ("you"). It must explain the reasoning behind the scores, never restate them, and never be a preamble like "Here are the scores".`,
-      prompt: `Problem: ${problem.title}\n${problem.statement}\n\nTopics to score: ${problem.topics.join(", ")}\n\nTranscript:\n${transcript}`
+    this.setState({
+      ...this.state,
+      grading: { status: "grading", sessionId: session.id }
     });
-
-    this.recordScore(session.id, output.scores);
-    const result: GradeResult = {
-      problemId: problem.id,
-      scores: output.scores,
-      feedback: output.feedback
-    };
-    const scoreLine = Object.entries(output.scores)
-      .map(([topic, score]) => `${topic}: ${score}/10`)
-      .join(" · ");
-    await this.persistMessages([
-      ...this.messages,
-      assistantMessage(`**Grade:** ${scoreLine}\n\n${output.feedback}`)
-    ]);
-    return result;
+    const instanceId = await this.runWorkflow<GradingParams>(
+      "GRADING_WORKFLOW",
+      { sessionId: session.id, problemId: problem.id, transcript }
+    );
+    return { instanceId };
   }
 
-  // Not callable: scores only come from the grader, never straight from the client.
-  private recordScore(
-    sessionId: string,
-    scores: Partial<Record<Topic, number>>
-  ) {
+  // Called by GradingWorkflow's save step (DO RPC, not @callable, so clients
+  // can't write scores). Safe to retry: a session is only saved once.
+  async saveGrade(sessionId: string, grade: Grade) {
+    const [session] = this.sql<{ ended_at: number | null }>`
+      SELECT ended_at FROM sessions WHERE id = ${sessionId}`;
+    if (!session || session.ended_at !== null) return;
+
     const now = Date.now();
-    for (const [topic, score] of Object.entries(scores)) {
+    this.sql`DELETE FROM scores WHERE session_id = ${sessionId}`;
+    for (const [topic, score] of Object.entries(grade.scores)) {
       this.sql`INSERT INTO scores (session_id, topic, score, created_at)
         VALUES (${sessionId}, ${topic}, ${score}, ${now})`;
     }
     this.sql`UPDATE sessions SET ended_at = ${now} WHERE id = ${sessionId}`;
+
+    this.sql`DELETE FROM weak_topics`;
+    this.sql`INSERT INTO weak_topics (topic, avg_score, attempts, updated_at)
+      SELECT topic, AVG(score), COUNT(*), ${now} FROM scores GROUP BY topic`;
+    this.setState({ ...this.state, topicStats: this.topicStats() });
+
+    const scoreLine = Object.entries(grade.scores)
+      .map(([topic, score]) => `${topic}: ${score}/10`)
+      .join(" · ");
+    await this.persistMessages([
+      ...this.messages,
+      assistantMessage(`**Grade:** ${scoreLine}\n\n${grade.feedback}`)
+    ]);
+  }
+
+  // Called by GradingWorkflow's nudge step after the revision delay.
+  async createNudge(sessionId: string) {
+    const [weakest] = this.topicStats();
+    if (!weakest) return;
+    const message = `**Revision reminder:** time to revisit **${weakest.topic}** (average ${weakest.avgScore.toFixed(1)}/10). Click “New problem” to practise it.`;
+    this
+      .sql`INSERT OR IGNORE INTO pending_nudges (session_id, topic, message, due_at)
+      VALUES (${sessionId}, ${weakest.topic}, ${message}, ${Date.now()})`;
+    // Deliver now if the user is online; otherwise onConnect picks it up.
+    if ([...this.getConnections()].length > 0) await this.deliverNudges();
+  }
+
+  private async deliverNudges() {
+    const pending = this.sql<{ id: number; message: string }>`
+      SELECT id, message FROM pending_nudges
+      WHERE shown_at IS NULL ORDER BY id`;
+    if (pending.length === 0) return;
+    const now = Date.now();
+    for (const n of pending) {
+      this.sql`UPDATE pending_nudges SET shown_at = ${now} WHERE id = ${n.id}`;
+    }
+    await this.persistMessages([
+      ...this.messages,
+      ...pending.map((n) => assistantMessage(n.message))
+    ]);
+  }
+
+  async onWorkflowError(
+    _workflowName: string,
+    _instanceId: string,
+    error: unknown
+  ) {
+    // The session stays open, so the user can submit again.
+    this.setState({
+      ...this.state,
+      grading: {
+        status: "error",
+        sessionId: this.state.grading.sessionId,
+        error: String(error)
+      }
+    });
   }
 
   @callable()
@@ -228,26 +303,9 @@ The feedback field is written to the candidate ("you"). It must explain the reas
     const workersai = createWorkersAI({
       binding: dedupeStreamingBinding(this.env.AI)
     });
-    const problem = this.getCurrentProblem();
-    const weak = this.weakTopics();
-
-    const problemContext = problem
-      ? `Current problem: ${problem.title} (${problem.difficulty}; topics: ${problem.topics.join(", ")})\n${problem.statement}`
-      : "No problem is active. If the candidate wants to practice, tell them to click “New problem”.";
-    const weakContext =
-      weak.length > 0
-        ? `The candidate is weakest at: ${weak.join(", ")}. Probe these areas.`
-        : "";
-
     const result = streamText({
       model: workersai(MODEL, { sessionAffinity: this.sessionAffinity }),
-      system: `You are a technical interviewer running a DSA mock interview.
-- Never write the full solution or full code. Give one small hint at a time, only when the candidate is stuck or asks.
-- Ask about time and space complexity and edge cases.
-- Be concise and encouraging. When the candidate is done, tell them to click “Submit & grade”.
-
-${problemContext}
-${weakContext}`,
+      system: buildSystemPrompt(this.getCurrentProblem(), this.weakTopics()),
       messages: await convertToModelMessages(this.messages),
       abortSignal: options?.abortSignal
     });

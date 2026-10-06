@@ -125,3 +125,43 @@ Also:
 - If everything passes, commit as "step 2: deterministic problem/score flow + schema + grading" (don't leave it uncommitted).
 Log this prompt to PROMPTS.md.
 ```
+
+## 11. Progress section in CLAUDE.md
+
+```
+Update CLAUDE.md with a "Progress" section: steps 1–2 done (commits eec4064, c4d3e8e), what each added, the ai-binding.ts wrapper, and that step 3 (Workflow) is next. Log this prompt to PROMPTS.md.
+```
+
+## 12. Plan step 3: grading Workflow
+
+```
+Read CLAUDE.md first for full context.
+
+Step 3: add the Cloudflare Workflow. Plan only, don't code yet. Check the docs MCP for current Workflows APIs and whether the Agents SDK has a built-in agent↔workflow integration.
+
+Flow:
+- submitAndGrade no longer grades inline. It starts a GradingWorkflow with { userId, sessionId, problemId, transcript } and returns immediately.
+- Workflow steps:
+  1. grade: the same structured-output grading function as now (retries on failure)
+  2. save: call back into the user's ChatAgent DO to write scores, close the session, and recompute weak_topics (avg_score, attempts)
+  3. sleep: configurable via env var (e.g. 2 minutes in dev for the demo, days in prod)
+  4. nudge: write a pending_nudges row for the weakest topic
+- The UI should update when grading finishes without polling. Use agent state sync (setState → client) if that's the right pattern.
+- Pending nudges show in chat on the next connect and are marked shown_at.
+- Weak topics feed into getNextProblem selection and the system prompt (verify this works end to end now that weak_topics gets filled).
+
+Extend test/roundtrip.mjs to cover: submit → workflow completes → weak_topics updated → nudge appears after the sleep (use a short sleep in test).
+Log this prompt to PROMPTS.md.
+```
+
+## 13. Approve step 3
+
+```
+Plan approved. Decisions:
+1. Delete local .wrangler/state, no migration.
+2. Deployed NUDGE_DELAY = "2 minutes" for the demo; README notes prod would use days.
+3. No test-only callables. Instead: export buildSystemPrompt(problem, weakTopics) as a pure function and unit test it, and make getNextProblem always pick from the weakest topic when weak topics exist (random only among those). Then the test seeds a low score through the real flow (submit a deliberately bad answer) and checks the next problem's topics include that topic.
+Keep userId out of params as you proposed.
+When npm run check and the round-trip pass on a fresh server, update the Progress section in CLAUDE.md and commit as "step 3: grading workflow + weak topics + nudges".
+Log this prompt to PROMPTS.md.
+```
