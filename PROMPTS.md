@@ -1,5 +1,7 @@
 # Prompts
 
+These are the prompts I used to build this project with [Claude Code](https://claude.com/claude-code), in order and verbatim (typos included). Shell commands I ran myself are included where they were part of the setup. The runtime prompts the app sends to Llama 3.3 are in the code: the interviewer's system prompt in `src/prompt.ts` and the grading prompt in `src/grading.ts`.
+
 ## 1. Scaffold project
 
 ```
@@ -192,5 +194,51 @@ Log this prompt to PROMPTS.md.
 ```
 Approved. Put history in state as you proposed, no getProgress() callable.
 Commit once npm run check, npm test and the round-trip pass. I'll check the layout in the browser after and report any issues as a follow-up.
+Log this prompt to PROMPTS.md.
+```
+
+## 16. Step 5: deploy + README
+
+```
+Read CLAUDE.md first for full context.
+
+Step 5: ship it. Plan briefly, then go.
+1. Deploy with npx wrangler deploy (worker + Durable Object + Workflow). Verify on the live URL: New problem → chat → Submit & grade → progress panel updates → nudge after 2 min. Run the round-trip test against the live URL too.
+2. Rewrite README.md for reviewers:
+   - What it is (1 paragraph) + live demo link
+   - How each assignment requirement is met (LLM, Workflow/coordination, chat input, memory/state)
+   - Architecture diagram (mermaid) + one traced example: submit → workflow steps → state sync → nudge
+   - Run locally (install, wrangler login, npm run dev, tests incl. the short NUDGE_DELAY command)
+   - Design decisions & findings: tool-call reliability test (75%, false calls on control prompt → deterministic buttons), the workers-ai-provider double-delta bug + wrapper, retry-safe saves, client state writes blocked, per-user DO via localStorage id (no auth, demo only), NUDGE_DELAY 2 min for demo / days in prod
+   - Project structure (key files, one line each)
+   - Remove all leftover starter/OpenAI sections
+3. Tidy PROMPTS.md: keep every prompt verbatim, add a short header explaining it's the AI prompts used to build this with Claude Code.
+4. Don't commit secrets. Check .gitignore covers .wrangler, .dev.vars, node_modules.
+Commit as "step 5: deploy + README", then tell me the exact commands to create a public GitHub repo named cf_ai_interview_coach and push.
+Log this prompt to PROMPTS.md.
+```
+
+## 17. Step 5 (revised): deploy + README
+
+```
+Read CLAUDE.md first for full context.
+
+Step 5: ship it. Plan briefly, then go.
+1. Deploy with npx wrangler deploy (worker + Durable Object + Workflow). Use Node 24 (nvm use 24). Verify on the live URL: New problem → chat → Submit & grade → progress panel updates → nudge after 2 min. Run the round-trip test against the live URL too.
+2. Rewrite README.md for reviewers:
+   - What it is (1 paragraph) + live demo link + GitHub repo link (https://github.com/R-Sruthi/cf_ai_interview_coach)
+   - How each assignment requirement is met (LLM, Workflow/coordination, chat input, memory/state)
+   - Architecture diagram (mermaid) + one traced example: submit → workflow steps → state sync → nudge
+   - Run locally (Node 24, install, wrangler login, npm run dev, tests incl. the short NUDGE_DELAY command)
+   - Design decisions & findings: tool-call reliability test (75%, false calls on control prompt → deterministic buttons), the workers-ai-provider double-delta bug + wrapper, retry-safe saves, client state writes blocked, per-user DO via localStorage id (no auth, demo only), NUDGE_DELAY 2 min for demo / days in prod
+   - Project structure (key files, one line each)
+   - Remove all leftover starter/OpenAI/Anthropic sections and the npm-agents-banner.svg reference (delete the file if unused)
+3. Tidy PROMPTS.md: keep every prompt verbatim, add a short header explaining these are the AI prompts used to build this with Claude Code.
+4. Don't commit secrets. Check .gitignore covers .wrangler, .dev.vars, node_modules. Add .nvmrc with "24".
+5. Update the Progress section in CLAUDE.md.
+Commit as "step 5: deploy + README".
+
+Git identity is set locally to R-Sruthi <sruthirs2004@gmail.com>. Don't change git config and don't push; I'll push myself.
+Note: I rewrote history to fix the author, so the commit hashes in CLAUDE.md's Progress section are stale. Update them from git log.
 Log this prompt to PROMPTS.md.
 ```

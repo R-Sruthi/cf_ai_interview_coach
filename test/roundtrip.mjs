@@ -4,9 +4,15 @@
 // Start the server with a short nudge delay (overrides the "2 minutes" var):
 //   CLOUDFLARE_INCLUDE_PROCESS_ENV=true NUDGE_DELAY="10 seconds" npx vite dev --port 5287
 // Then: node test/roundtrip.mjs localhost:5287 [rounds] [nudgeDelaySeconds]
+// Against the deployed worker (NUDGE_DELAY is "2 minutes" there):
+//   node test/roundtrip.mjs <worker>.workers.dev 1 120
 import { AgentClient } from "agents/client";
 
 const host = process.argv[2] ?? "localhost:5173";
+// Deployed hosts need https (the WebSocket side picks wss on its own).
+const httpOrigin = /^(localhost|127\.0\.0\.1)(:|$)/.test(host)
+  ? `http://${host}`
+  : `https://${host}`;
 const rounds = Number(process.argv[3] ?? 3);
 const nudgeDelayMs = Number(process.argv[4] ?? 10) * 1000;
 const NUDGE_MARKER = "Revision reminder";
@@ -60,7 +66,7 @@ function waitFor(client, predicate, timeoutMs, label) {
 // (the WebSocket only pushes history when it changes).
 async function loadHistory(client, name) {
   const res = await fetch(
-    `http://${host}/agents/chat-agent/${name}/get-messages`
+    `${httpOrigin}/agents/chat-agent/${name}/get-messages`
   );
   client.messages = await res.json();
 }

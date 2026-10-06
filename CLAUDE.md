@@ -29,12 +29,12 @@ DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiri
 
 ## Progress
 
-- [x] Step 1: Llama 3.3 + tool-call test (`eec4064`)
+- [x] Step 1: Llama 3.3 + tool-call test (`e3ee535`)
   - Switched the chat model to Llama 3.3 via the `AI` binding + `workers-ai-provider` (starter had no OpenAI deps to remove)
   - Renamed the worker/package to `cf-ai-interview-coach` (worker names can't contain `_`)
   - `test/tool-call.worker.ts` + `test/wrangler.tool-test.jsonc`: tool-calling reliability test (results under Decisions)
   - `test/` is excluded from the root `tsconfig.json` and has its own `test/tsconfig.json`
-- [x] Step 2: deterministic problem/score flow + schema + grading (`c4d3e8e`)
+- [x] Step 2: deterministic problem/score flow + schema + grading (`f587a92`)
   - `src/problems.ts`: 25 hard-coded problems across 13 topics, each with difficulty + topics
   - `ChatAgent` (`src/server.ts`): no LLM tools, no MCP/demo code; system prompt built from the current problem + weak topics
   - SQLite tables created in `onStart()`: `sessions`, `scores`, `weak_topics`, `pending_nudges` (the last two are filled in step 3)
@@ -43,7 +43,7 @@ DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiri
   - UI (`src/app.tsx`): per-user Durable Object (random id in `localStorage` passed as `useAgent({ name })`), difficulty picker, "New problem" and "Submit & grade" buttons; MCP, tool UI and image attachments removed
   - `test/roundtrip.mjs`: full chat round-trip against a running dev server (`node test/roundtrip.mjs localhost:<port> [rounds]`)
   - `src/ai-binding.ts`: `dedupeStreamingBinding()` works around a `workers-ai-provider` bug (3.3.1 and 4.0.0). Llama 3.3 stream chunks carry each token in both `response` and `choices[0].delta.content`, and the provider emits both, so every token appeared twice. The wrapper drops `response` from streamed chunks that also have `choices`. Only the chat stream uses it. Remove it once the provider reads one field; the round-trip test's "no repeated consecutive chunks/words" check guards against the regression
-- [x] Step 3: grading workflow + weak topics + nudges
+- [x] Step 3: grading workflow + weak topics + nudges (`1cc6885`)
   - Uses the Agents SDK integration: `GradingWorkflow extends AgentWorkflow<ChatAgent, GradingParams>` (`src/workflow.ts`), started with `this.runWorkflow("GRADING_WORKFLOW", { sessionId, problemId, transcript })`; `this.agent` routes back to the user's DO, so there's no `userId` param
   - Steps: `grade` (`gradeTranscript` in `src/grading.ts`; 3 retries, exponential backoff) → `save` (`this.agent.saveGrade`) → `step.mergeAgentState({ grading: done })` → `step.sleep(env.NUDGE_DELAY)` → `nudge` (`this.agent.createNudge`)
   - `submitAndGrade` returns `{ instanceId }` immediately; the UI gets the result through agent state sync (`CoachState.grading`, `topicStats`), with no polling. `validateStateChange` rejects client state writes
@@ -54,14 +54,19 @@ DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiri
   - Nudges: written for the user's weakest topic after the delay; delivered immediately if the user is connected, otherwise in `onConnect`; `shown_at` prevents re-delivery
   - `NUDGE_DELAY` is `"2 minutes"` in `wrangler.jsonc` (deployed demo; real use would be days). The round-trip test overrides it: `CLOUDFLARE_INCLUDE_PROCESS_ENV=true NUDGE_DELAY="10 seconds" npx vite dev --port <port>`, then `node test/roundtrip.mjs localhost:<port> 3 10`
   - `pending_nudges` gained a `session_id` column; the local `.wrangler/state` was deleted rather than migrated (nothing deployed yet)
-- [x] Step 4: progress panel + UI polish
+- [x] Step 4: progress panel + UI polish (`e3f7310`)
   - `CoachState.history`: the last 10 graded sessions (`{ sessionId, problemId, title, scores, gradedAt }`, newest first), recalculated with `topicStats` in `refreshProgress()` (called from `saveGrade` and `onStart`). The panel updates live through state sync; there is no `getProgress()` callable
   - Nudge messages carry `metadata: { kind: "nudge" }` (`MessageKind`); the UI falls back to the `**Revision reminder:**` text prefix for older messages
   - `src/components/`: `ProgressPanel` (topics weakest first with "x/10", attempts and a colour bar; recent sessions with per-topic score badges and "time ago"), `ProblemCard` (title, difficulty badge, topics, markdown statement; collapses while grading), `WelcomeCard` (4-step flow for new users)
   - Layout: the panel is a right column at `lg`+, and a slide-over drawer opened by the header "Progress" button below `lg`. The top bar shows weak-topic chips as "graphs · 4/10"
   - `src/format.ts` (`formatScore`, `scoreTone`, `timeAgo`), unit-tested in `test/format.test.ts`
   - Layout not yet checked in a browser (no browser automation here); the user is reviewing it
-- [ ] Next: README (run instructions, deployed link, note that prod `NUDGE_DELAY` would be days), deploy
+- [x] Step 5: deploy + README
+  - Live: https://cf-ai-interview-coach.sruthirs2004.workers.dev (deploy with `npm run deploy` = `vite build && wrangler deploy`; plain `wrangler deploy` needs the Vite build first)
+  - Repo: https://github.com/R-Sruthi/cf_ai_interview_coach (the user pushes; don't push or change git config)
+  - `test/roundtrip.mjs` uses https for non-localhost hosts: `node test/roundtrip.mjs cf-ai-interview-coach.sruthirs2004.workers.dev 3 120`
+  - README rewritten for reviewers (requirements table, mermaid diagram, traced submit → nudge example, design decisions); starter content and `npm-agents-banner.svg` removed
+  - `.nvmrc` = 24; `.gitignore` already covers `.wrangler`, `.dev.vars`, `node_modules`
 
 ## Assignment requirements
 
