@@ -165,3 +165,32 @@ Keep userId out of params as you proposed.
 When npm run check and the round-trip pass on a fresh server, update the Progress section in CLAUDE.md and commit as "step 3: grading workflow + weak topics + nudges".
 Log this prompt to PROMPTS.md.
 ```
+
+## 14. Plan step 4: progress panel + UI polish
+
+```
+Read CLAUDE.md first for full context.
+
+Step 4: UI polish so the memory is visible in the demo. Plan briefly, then wait for my approval.
+
+1. Right-side "Progress" panel (collapses to a drawer on mobile):
+   - Weak topics: each topic with avg score as "x/10", attempts count, and a small bar. Sorted weakest first.
+   - Score history: last ~10 graded sessions (problem title, topics + scores, time ago).
+   - Updates live through agent state sync after each grade, with no refresh.
+2. Top bar: show weak-topic chips as "graphs · 0/10" instead of "0.0".
+3. Empty state for a new user: a short welcome card explaining the flow (New problem → explain approach → Submit & grade → coach remembers weak topics and nudges you to revise).
+4. Problem card: show title, difficulty badge, topic tags, and statement clearly while a problem is active.
+5. Style nudge messages differently from normal replies (a small "Revision reminder" label).
+
+Don't change server logic beyond what the panel needs (e.g. a @callable getProgress() returning weak topics + recent history, read-only).
+Run npm run check and the round-trip test, then commit as "step 4: progress panel + UI polish".
+Log this prompt to PROMPTS.md.
+```
+
+## 15. Approve step 4
+
+```
+Approved. Put history in state as you proposed, no getProgress() callable.
+Commit once npm run check, npm test and the round-trip pass. I'll check the layout in the browser after and report any issues as a follow-up.
+Log this prompt to PROMPTS.md.
+```

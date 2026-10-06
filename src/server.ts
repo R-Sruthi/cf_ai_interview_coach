@@ -40,7 +40,22 @@ export interface CoachState {
   };
   // All scored topics, weakest first.
   topicStats: TopicStat[];
+  // Most recent graded sessions, newest first.
+  history: HistoryEntry[];
 }
+
+export interface HistoryEntry {
+  sessionId: string;
+  problemId: string;
+  title: string;
+  scores: Partial<Record<Topic, number>>;
+  gradedAt: number;
+}
+
+// Set on nudge messages so the UI can style them.
+export type MessageKind = "nudge";
+
+const HISTORY_LIMIT = 10;
 
 function textOf(message: UIMessage): string {
   return message.parts
@@ -49,18 +64,23 @@ function textOf(message: UIMessage): string {
     .trim();
 }
 
-function assistantMessage(text: string): UIMessage {
+function assistantMessage(text: string, kind?: MessageKind): UIMessage {
   return {
     id: crypto.randomUUID(),
     role: "assistant",
-    parts: [{ type: "text", text }]
+    parts: [{ type: "text", text }],
+    ...(kind ? { metadata: { kind } } : {})
   };
 }
 
 export class ChatAgent extends AIChatAgent<Env, CoachState> {
   maxPersistedMessages = 100;
   chatRecovery = true;
-  initialState: CoachState = { grading: { status: "idle" }, topicStats: [] };
+  initialState: CoachState = {
+    grading: { status: "idle" },
+    topicStats: [],
+    history: []
+  };
 
   onStart() {
     this.sql`CREATE TABLE IF NOT EXISTS sessions (
@@ -93,6 +113,49 @@ export class ChatAgent extends AIChatAgent<Env, CoachState> {
       due_at INTEGER NOT NULL,
       shown_at INTEGER
     )`;
+    this.refreshProgress();
+  }
+
+  // Pushes topic stats + recent history to clients through state sync.
+  private refreshProgress() {
+    this.setState({
+      ...this.state,
+      topicStats: this.topicStats(),
+      history: this.recentHistory()
+    });
+  }
+
+  private recentHistory(): HistoryEntry[] {
+    const rows = this.sql<{
+      session_id: string;
+      problem_id: string;
+      ended_at: number;
+      topic: Topic;
+      score: number;
+    }>`
+      SELECT s.id AS session_id, s.problem_id, s.ended_at, sc.topic, sc.score
+      FROM sessions s JOIN scores sc ON sc.session_id = s.id
+      WHERE s.id IN (
+        SELECT session_id FROM scores GROUP BY session_id
+        ORDER BY MAX(id) DESC LIMIT ${HISTORY_LIMIT}
+      )
+      ORDER BY s.ended_at DESC, s.id, sc.id`;
+    const bySession = new Map<string, HistoryEntry>();
+    for (const r of rows) {
+      let entry = bySession.get(r.session_id);
+      if (!entry) {
+        entry = {
+          sessionId: r.session_id,
+          problemId: r.problem_id,
+          title: getProblem(r.problem_id)?.title ?? r.problem_id,
+          scores: {},
+          gradedAt: r.ended_at
+        };
+        bySession.set(r.session_id, entry);
+      }
+      entry.scores[r.topic] = r.score;
+    }
+    return [...bySession.values()];
   }
 
   // Only the server (and the Workflow, via the agent) may change state.
@@ -239,7 +302,7 @@ export class ChatAgent extends AIChatAgent<Env, CoachState> {
     this.sql`DELETE FROM weak_topics`;
     this.sql`INSERT INTO weak_topics (topic, avg_score, attempts, updated_at)
       SELECT topic, AVG(score), COUNT(*), ${now} FROM scores GROUP BY topic`;
-    this.setState({ ...this.state, topicStats: this.topicStats() });
+    this.refreshProgress();
 
     const scoreLine = Object.entries(grade.scores)
       .map(([topic, score]) => `${topic}: ${score}/10`)
@@ -273,7 +336,7 @@ export class ChatAgent extends AIChatAgent<Env, CoachState> {
     }
     await this.persistMessages([
       ...this.messages,
-      ...pending.map((n) => assistantMessage(n.message))
+      ...pending.map((n) => assistantMessage(n.message, "nudge"))
     ]);
   }
 

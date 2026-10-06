@@ -54,6 +54,13 @@ DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiri
   - Nudges: written for the user's weakest topic after the delay; delivered immediately if the user is connected, otherwise in `onConnect`; `shown_at` prevents re-delivery
   - `NUDGE_DELAY` is `"2 minutes"` in `wrangler.jsonc` (deployed demo; real use would be days). The round-trip test overrides it: `CLOUDFLARE_INCLUDE_PROCESS_ENV=true NUDGE_DELAY="10 seconds" npx vite dev --port <port>`, then `node test/roundtrip.mjs localhost:<port> 3 10`
   - `pending_nudges` gained a `session_id` column; the local `.wrangler/state` was deleted rather than migrated (nothing deployed yet)
+- [x] Step 4: progress panel + UI polish
+  - `CoachState.history`: the last 10 graded sessions (`{ sessionId, problemId, title, scores, gradedAt }`, newest first), recalculated with `topicStats` in `refreshProgress()` (called from `saveGrade` and `onStart`). The panel updates live through state sync; there is no `getProgress()` callable
+  - Nudge messages carry `metadata: { kind: "nudge" }` (`MessageKind`); the UI falls back to the `**Revision reminder:**` text prefix for older messages
+  - `src/components/`: `ProgressPanel` (topics weakest first with "x/10", attempts and a colour bar; recent sessions with per-topic score badges and "time ago"), `ProblemCard` (title, difficulty badge, topics, markdown statement; collapses while grading), `WelcomeCard` (4-step flow for new users)
+  - Layout: the panel is a right column at `lg`+, and a slide-over drawer opened by the header "Progress" button below `lg`. The top bar shows weak-topic chips as "graphs · 4/10"
+  - `src/format.ts` (`formatScore`, `scoreTone`, `timeAgo`), unit-tested in `test/format.test.ts`
+  - Layout not yet checked in a browser (no browser automation here); the user is reviewing it
 - [ ] Next: README (run instructions, deployed link, note that prod `NUDGE_DELAY` would be days), deploy
 
 ## Assignment requirements

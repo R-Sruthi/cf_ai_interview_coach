@@ -190,7 +190,35 @@ async function submitAndAwaitGrade(client, problem) {
     "session closed after grading",
     (await client.call("getCurrentProblem")) === null
   );
+  const [latest] = client.agentState.history;
+  check(
+    "progress history leads with this session (live via state)",
+    latest?.sessionId === grading.sessionId &&
+      latest.title === problem.title &&
+      JSON.stringify(latest.scores) === JSON.stringify(grading.scores),
+    latest ? `${latest.title} ${JSON.stringify(latest.scores)}` : "empty"
+  );
   return grading;
+}
+
+// history (synced state) must match the scores table, newest first, max 10.
+async function checkHistory(client) {
+  const rows = await client.call("getScores");
+  const bySession = {};
+  for (const r of rows) (bySession[r.session_id] ??= {})[r.topic] = r.score;
+  const history = client.agentState.history;
+  const expectedLength = Math.min(Object.keys(bySession).length, 10);
+  const matches = history.every(
+    (h) => JSON.stringify(h.scores) === JSON.stringify(bySession[h.sessionId])
+  );
+  const newestFirst = history.every(
+    (h, i) => i === 0 || history[i - 1].gradedAt >= h.gradedAt
+  );
+  check(
+    "history matches scores, newest first",
+    history.length === expectedLength && matches && newestFirst,
+    `${history.length} entries`
+  );
 }
 
 // weak_topics (synced as topicStats) must match the raw scores table.
@@ -276,6 +304,7 @@ for (let r = 0; r < rounds; r++) {
 
   await submitAndAwaitGrade(a, problem);
   await checkTopicStats(a);
+  await checkHistory(a);
 }
 
 console.log(`\n── User A: nudges while connected ──`);
@@ -297,6 +326,10 @@ check(
     a.agentState.topicStats.some((s) => textOf(m).includes(`**${s.topic}**`))
   ),
   nudgesA.map((m) => textOf(m).slice(0, 70)).join(" | ")
+);
+check(
+  "nudge messages are tagged metadata.kind = nudge",
+  nudgesA.length > 0 && nudgesA.every((m) => m.metadata?.kind === "nudge")
 );
 
 a.close();
@@ -370,6 +403,13 @@ check(
   (await b.call("getCurrentProblem")) === null
 );
 check("another user has no scores", (await b.call("getScores")).length === 0);
+await waitFor(b, (x) => x.agentState !== undefined, 5_000, "state").catch(
+  () => {}
+);
+check(
+  "another user starts with empty progress",
+  b.agentState?.history?.length === 0 && b.agentState?.topicStats?.length === 0
+);
 b.close();
 
 console.log(
