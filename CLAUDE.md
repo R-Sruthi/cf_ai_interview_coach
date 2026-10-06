@@ -22,6 +22,10 @@ DSA Mock Interview Coach: a take-home assignment for Cloudflare (fast-track hiri
 - Problem bank: hard-coded 20–30 problems, each tagged with topics + difficulty
 - Grading: the LLM gives live hints/feedback in chat; the Workflow's grade step produces structured JSON `{topic: score}` that updates `weak_topics`
 - Llama tool calling: test it first. If unreliable, make `getNextProblem`/`recordScore` deterministic code paths instead of LLM tools
+- Tool-calling findings (step 1, `test/tool-call.worker.ts`, AI SDK + `workers-ai-provider`, 5 runs per prompt): 15/20 overall (75%)
+  - Correct tool + schema-valid args on every prompt that needed a tool (15/15); no tool calls printed as plain text
+  - Called a tool on 5/5 runs of a plain conceptual question ("time complexity of binary search?" → `getNextProblem`)
+  - Requirement is zero false tool calls, so decision #4 applies: the chat agent has no LLM tools; `getNextProblem`/`recordScore` are `@callable()` agent methods triggered by UI buttons
 
 ## Assignment requirements
 

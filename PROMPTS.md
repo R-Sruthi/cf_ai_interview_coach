@@ -86,3 +86,42 @@ Approved. Two tweaks:
 2. After verification passes, commit with message "step 1: llama 3.3 + tool-call test".
 Then report the tool-call pass rates and stop. Log this prompt to PROMPTS.md.
 ```
+
+## 7. Plan step 2: deterministic tools
+
+```
+Results are clear: no false tool calls is the hard requirement, so apply decision #4.
+Plan step 2 (don't code yet):
+- Remove LLM tools from the chat agent (including the starter demo tools). Llama only gives hints and feedback, with the current problem + weak topics injected into the system prompt.
+- getNextProblem and recordScore become agent methods called from UI buttons ("New problem", "Submit & grade"). Check the docs MCP for the right Agents SDK way to call agent methods from the client (e.g. @callable).
+- Add the SQLite schema (sessions, scores, weak_topics, pending_nudges) and a hard-coded problem bank of about 25 problems tagged with topic and difficulty.
+- No Workflow yet; recordScore just writes the score for now.
+- Also do the full chat round-trip test you skipped in step 1.
+Record the tool-call findings in CLAUDE.md under Decisions (they'll go in the README later). Log this prompt to PROMPTS.md.
+```
+
+## 8. Grading call: structured output
+
+```
+Two additions for the grading call:
+1. Use structured output (generateObject or Workers AI JSON mode, check docs MCP for Llama 3.3 support) instead of parsing free text.
+2. Restrict the score keys to the current problem's topics (zod enum built from problem.topics), so Llama can't invent topic names that pollute weak_topics.
+```
+
+## 9. No commits
+
+```
+dont commit anything, just local changes
+```
+
+## 10. Fix duplicated stream + commit step 2
+
+```
+Yes: go with A and tighten the grading feedback prompt.
+Also:
+- Add a check to test/roundtrip.mjs that fails if the streamed reply has repeated consecutive words/chunks (e.g. "ForFor"), so this regression is caught automatically.
+- Put a comment on the binding wrapper explaining the provider bug and when it can be removed.
+- Rerun npm run check and the round-trip test on a fresh dev server.
+- If everything passes, commit as "step 2: deterministic problem/score flow + schema + grading" (don't leave it uncommitted).
+Log this prompt to PROMPTS.md.
+```
